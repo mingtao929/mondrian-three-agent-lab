@@ -7,6 +7,49 @@ from .MCP接入验证 import SeatSmokeTest, create_app
 
 
 class SeatSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(find_spec("mcp"), "安装 MCP SDK 后运行协议验证")
+    def test_three_mcp_clients_finish_one_isolated_game(self):
+        # 用三个独立凭证走真实 MCP 工具协议，模拟客户端依次完成一整局。
+        from starlette.testclient import TestClient
+        from .MCP接入验证 import SeatScheduledGame
+        from 模块05_实验记录与对照.实验演示 import 脚本回复
+
+        log = io.StringIO()
+        tokens = {seat: f"test-{seat}" for seat in "ABC"}
+        with TestClient(create_app(SeatScheduledGame(log), tokens),
+                        base_url="http://127.0.0.1:8765") as client:
+            def call(seat, name, arguments):
+                response = client.post("/mcp", headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Authorization": f"Bearer {tokens[seat]}",
+                }, json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                         "params": {"name": name, "arguments": arguments}})
+                self.assertEqual(response.status_code, 200)
+                result = response.json()["result"]
+                self.assertFalse(result.get("isError", False))
+                return json.loads(result["content"][0]["text"])
+
+            self.assertEqual(call("B", "next_puzzle_turn", {}), {"status": "waiting"})
+            for turn in range(9):
+                seat = "ABC"[turn % 3]
+                job = call(seat, "next_puzzle_turn", {})
+                view = job["observation"]
+                self.assertEqual(set(view), {"seat", "board", "pieces", "clue", "messages"})
+                self.assertEqual(view["seat"], seat)
+                self.assertEqual(view["clue"]["for_seat"], "BCA"[turn % 3])
+                submission = {"request_id": job["request_id"],
+                              "reply": 脚本回复(view, True)}
+                if turn == 0:
+                    self.assertEqual(call("B", "submit_puzzle_turn", submission)["status"], "rejected")
+                    self.assertEqual(call("A", "next_puzzle_turn", {}), job)
+                receipt = call(seat, "submit_puzzle_turn", submission)
+                self.assertTrue(receipt["result"]["ok"])
+                self.assertEqual(call(seat, "submit_puzzle_turn", submission)["status"], "rejected")
+            self.assertEqual(call("A", "next_puzzle_turn", {}), {"status": "finished"})
+        records = [json.loads(line) for line in log.getvalue().splitlines()]
+        self.assertEqual(len(records), 9)
+        self.assertTrue(records[-1]["solved"])
+
     def test_a_reads_moves_and_records_the_round(self):
         # 同一份棋盘用于读取和移动。核对其它碎片以及逐行日志。
         log = io.StringIO()

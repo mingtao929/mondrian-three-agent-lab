@@ -15,9 +15,13 @@ class Scheduler:
         self._agents = dict(agents)
         self._turn = 0
 
-    def step(self):
+    @property
+    def current_seat(self):
         # 取余数把递增轮次映射为 A、B、C、A……。
-        seat = self._seats[self._turn % len(self._seats)]
+        return self._seats[self._turn % len(self._seats)]
+
+    def step(self):
+        seat = self.current_seat
         observation = self._collaboration.observe(seat)
         self._turn += 1
         record = {"turn": self._turn, "input": observation, "raw_reply": None, "action": None}

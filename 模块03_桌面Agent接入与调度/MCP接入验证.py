@@ -7,6 +7,61 @@ from uuid import uuid4
 
 from 模块01_拼图核心.拼图核心 import Puzzle
 from 模块02_三方视野与通信.三方视野与通信 import Collaboration
+from .轮次调度 import Scheduler
+
+
+class SeatScheduledGame:
+    """同局三个桌面会话共用一个调度器，各自领取并提交自己的回合。"""
+
+    def __init__(self, log):
+        self.game = Puzzle()
+        self.collaboration = Collaboration(self.game)
+        self.log = log
+        self.run_id = uuid4().hex
+        self.request_id = uuid4().hex
+        self.reply = None
+        self.storage_failed = False
+        # SDK 处理请求。调度器从本次工具提交读取回复，再复用原有规则执行。
+        self.scheduler = Scheduler(self.game, self.collaboration,
+                                   {seat: self._submitted_reply for seat in "ABC"})
+
+    def _submitted_reply(self, _observation):
+        return self.reply
+
+    def next_turn(self, seat):
+        if self.storage_failed:
+            return {"status": "paused", "reason": "日志写入失败，请检查服务器"}
+        if self.game.is_solved():
+            return {"status": "finished"}
+        if seat != self.scheduler.current_seat:
+            return {"status": "waiting"}
+        return {"status": "ready", "request_id": self.request_id,
+                "observation": self.collaboration.observe(seat)}
+
+    def submit_turn(self, seat, request_id, reply):
+        # 在同一事件循环内同步校验和执行，中间不让出控制权。
+        # 身份来自请求上下文。即使拿到队友回合编号也不能代交。
+        status = self.next_turn(seat)["status"]
+        if status != "ready" or request_id != self.request_id:
+            return {"status": "rejected", "reason": "当前席位无匹配的可用回合"}
+        if not reply.strip() or len(reply) > 2000:
+            return {"status": "rejected", "reason": "回复须为 1 至 2000 字符"}
+        self.reply = reply
+        try:
+            record = self.scheduler.step()
+        finally:
+            self.reply = None
+        self.request_id = uuid4().hex
+        solved = self.game.is_solved()
+        try:
+            event = {"run_id": self.run_id, "request_id": request_id, "solved": solved, **record}
+            self.log.write(json.dumps(event, ensure_ascii=False) + "\n")
+            self.log.flush()
+        except (OSError, ValueError):
+            # 动作已经执行，停止本局，避免继续产生没有记录的动作。
+            self.storage_failed = True
+            return {"status": "paused", "reason": "动作已处理，但日志写入失败"}
+        return {"status": "accepted", "result": record["result"], "solved": solved}
 
 
 class SeatSmokeTest:
@@ -55,15 +110,27 @@ def create_app(session, tokens):
     request_seat = ContextVar("request_seat")
     server = FastMCP("蒙德里安席位接入验证", stateless_http=True, json_response=True)
 
-    @server.tool()
-    async def read_view() -> dict:
-        """读取当前席位的局部视野。"""
-        return session.observe(request_seat.get())
+    if isinstance(session, SeatScheduledGame):
+        @server.tool()
+        async def next_puzzle_turn() -> dict:
+            """领取自己当前回合。waiting 表示稍后重试，finished 表示通关。"""
+            return session.next_turn(request_seat.get())
 
-    @server.tool()
-    async def move_piece(dx: int, dy: int) -> dict:
-        """移动当前席位的碎片。dx 向右为正，dy 向下为正。"""
-        return session.move(dx, dy, seat=request_seat.get())
+        @server.tool()
+        async def submit_puzzle_turn(request_id: str, reply: str) -> dict:
+            """提交一个 JSON 文本动作。action 为 chat、move、rotate 或 wait。聊天用 text，移动用整数 dx、dy。"""
+            return session.submit_turn(request_seat.get(), request_id, reply)
+    else:
+        # 保留早期连通性入口，正式轮换模式仅注册领取和提交工具。
+        @server.tool()
+        async def read_view() -> dict:
+            """读取当前席位的局部视野。"""
+            return session.observe(request_seat.get())
+
+        @server.tool()
+        async def move_piece(dx: int, dy: int) -> dict:
+            """移动当前席位的碎片。dx 向右为正，dy 向下为正。"""
+            return session.move(dx, dy, seat=request_seat.get())
 
     app = server.streamable_http_app()
 
@@ -95,12 +162,16 @@ if __name__ == "__main__":
     # 凭证由启动环境传入，日志路径由调用者指定。两者都不写入 Git。
     parser = argparse.ArgumentParser(description="启动 MCP 席位隔离验证")
     parser.add_argument("--log", required=True)
+    parser.add_argument("--scheduled", action="store_true", help="启动三席位轮流行动模式")
     args = parser.parse_args()
     # B、C 未配置时可继续验证 A。三席位联调时为三者分别设置凭证。
     tokens = {seat: os.environ[f"MONDRIAN_SEAT_{seat}_TOKEN"] for seat in "ABC"
               if os.environ.get(f"MONDRIAN_SEAT_{seat}_TOKEN")}
     if not tokens:
         parser.error("请至少设置一个席位凭证，例如 MONDRIAN_SEAT_A_TOKEN")
+    if args.scheduled and set(tokens) != set("ABC"):
+        parser.error("轮换模式需要 A、B、C 三个独立凭证")
     with open(args.log, "a", encoding="utf-8") as log:
         # 只监听本机，供同一电脑上的 WorkBuddy 调用。
-        uvicorn.run(create_app(SeatSmokeTest(log), tokens), host="127.0.0.1", port=8765)
+        session = SeatScheduledGame(log) if args.scheduled else SeatSmokeTest(log)
+        uvicorn.run(create_app(session, tokens), host="127.0.0.1", port=8765)

@@ -1,0 +1,17 @@
+{
+  "name": "mgf-three-agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/three-*.test.js test/agents.test.js test/store.test.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "exceljs": "^4.4.0"
+  }
+}

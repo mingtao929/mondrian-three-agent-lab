@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {Store} from '../src/store.js';import {createSession} from '../src/engine.js';
+test('protocol logs preserve complete inputs while sharing immutable board snapshots; replay still restores current metadata',()=>{
+ const store=new Store(':memory:');try{const s=createSession();store.record(s,'researcher','created',{});s.agents.A.status='MCP已连接';s.revision++;const input={requestId:'turn',observation:{role:'A',visibleTargets:[{x:8,y:7}]}};store.record(s,'A','agent_turn_input',input);const rows=store.db.prepare('SELECT seq,snapshot FROM events ORDER BY seq').all();const compact=JSON.parse(rows[1].snapshot);assert.equal(compact.$ref,rows[0].seq);assert.ok(rows[1].snapshot.length<rows[0].snapshot.length/2);const replay=store.snapshot(s.id,rows[1].seq);assert.equal(replay.agents.A.status,'MCP已连接');assert.equal(replay.revision,s.revision);assert.deepEqual(replay.levels,s.levels);assert.deepEqual(store.events(s.id)[1].payload,input);assert.equal(store.researchEvents(s.id)[1].phase,s.phase);}
+ finally{store.close();}
+});

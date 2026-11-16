@@ -1,0 +1,14 @@
+# Offline build: node:24-bookworm-slim must be loaded from the verified official image.
+FROM node:24-bookworm-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+# Current lockfile has no native addons, OS/CPU selectors or install scripts.
+# Copy the already installed and regression-tested JS dependency tree offline.
+COPY node_modules/ ./node_modules/
+COPY --chown=node:node src/ ./src/
+COPY --chown=node:node public/ ./public/
+RUN mkdir -p /app/data && chown node:node /app/data
+USER node
+ENV NODE_ENV=production DATA_DIR=/app/data MCP_BIND_HOST=0.0.0.0
+EXPOSE 4391
+CMD ["node", "src/sandbox-server.js"]

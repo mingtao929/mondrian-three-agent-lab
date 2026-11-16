@@ -1,0 +1,18 @@
+import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import {createApp} from '../src/server.js';
+test('settings isolate provider keys and profiles; fixed host uses no model and exports no keys',{timeout:9000},async()=>{
+ const requests=[];const model=http.createServer(async(req,res)=>{let raw='';for await(const c of req)raw+=c;const b=JSON.parse(raw);requests.push({body:b,auth:req.headers.authorization});res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({message:b.model==='host'?'请先分享可见线索':'公开消息',action:null})}}]}));});await new Promise(r=>model.listen(0,'127.0.0.1',r));const endpoint=`http://127.0.0.1:${model.address().port}`;
+ const app=createApp({database:':memory:',schedulerInterval:20});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${app.server.address().port}`;let token;
+ const call=async(path,b)=>{const r=await fetch(base+path,{method:b?'POST':'GET',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(b?{body:JSON.stringify(b)}:{})});return {status:r.status,data:await r.json()};};
+ try{const s=(await call('/api/sessions',{})).data;token=s.tokens.researcher;const p='/api/sessions/'+s.id;
+ assert.equal((await call(p+'/agents',{role:'A',preset:'doubao',endpoint,model:'solver',apiKey:'old-provider-key',enabled:true})).status,200);
+ assert.equal((await call(p+'/agents',{role:'A',preset:'deepseek',endpoint,model:'solver',profile:'private-A',profileEnabled:true,enabled:true})).status,200);
+ for(const role of ['B','C'])await call(p+'/agents',{role,kind:'demo',profile:'private-'+role,profileEnabled:true,enabled:true});
+ assert.equal((await call(p+'/moderator',{enabled:true,name:'引导员'})).status,200);
+ assert.equal((await call(p+'/action',{type:'start'})).status,400,'provider switch clears old key and blocks start');await call(p+'/agents',{role:'A',preset:'deepseek',endpoint,model:'solver',apiKey:'new-provider-key',enabled:true});assert.equal((await call(p+'/action',{type:'start'})).status,200);let events=[];for(let i=0;i<100;i++){events=(await call(p+'/events')).data;if(events.some(e=>e.role==='moderator'&&e.type==='chat')&&requests.some(r=>r.body.model==='solver'))break;await new Promise(r=>setTimeout(r,20));}
+ assert.ok(events.some(e=>e.role==='moderator'&&e.type==='chat'));const own=requests.find(r=>r.body.model==='solver');assert.equal(own.auth,'Bearer new-provider-key','provider switch must use only new key');assert.ok(JSON.stringify(own.body).includes('private-A'));assert.equal(JSON.stringify(own.body).includes('private-B'),false);
+ assert.equal(requests.some(r=>r.body.model==='host'),false);const raw=JSON.stringify(events.find(e=>e.role==='moderator'&&e.type==='chat').payload);for(const hidden of ['private-A','private-B','private-C','worldVertices','visibleTargets',s.tokens.researcher])assert.equal(raw.includes(hidden),false);
+ assert.equal((await call(p+'/agents',{role:'A',kind:'openai',endpoint,model:'solver',profile:'changed',enabled:true})).status,400);
+ await call(p+'/action',{type:'pause'});assert.equal((await call(p+'/agents',{role:'A',kind:'openai',endpoint,model:'solver',profile:'changed',enabled:true})).status,200);
+ const out=(await call(p+'/export')).data;assert.equal(JSON.stringify(out).includes('host-key'),false);assert.equal(JSON.stringify(out).includes('old-provider-key'),false);assert.equal(JSON.stringify(out).includes('new-provider-key'),false);assert.equal(out.settings.moderator.name,'引导员');
+ }finally{await app.close();model.closeAllConnections();await new Promise(r=>model.close(r));}
+});

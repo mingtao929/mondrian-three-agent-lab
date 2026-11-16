@@ -1,0 +1,6 @@
+import {readFileSync} from 'node:fs';import {resolve} from 'node:path';import {createApp} from './server.js';import {createGuestGateway} from './guest-gateway.js';
+const config=JSON.parse(readFileSync(resolve(process.argv[2]),'utf8').replace(/^\uFEFF/,''));
+if(!/^https:\/\/[a-z0-9.-]+$/.test(config.baseUrl))throw Error('需要HTTPS分享域名');
+const app=createApp({database:config.database,sharing:{gatewaySecret:config.gatewaySecret},mcpOnly:true,mcpBaseUrl:config.baseUrl}),desktop=app.mcp,gateway=createGuestGateway({domain:new URL(config.baseUrl).hostname,privatePort:4390,invitationToken:config.invitationToken,gatewaySecret:config.gatewaySecret,desktop});
+try{await new Promise((resolve,reject)=>{app.server.once('error',reject);app.server.listen(4390,'127.0.0.1',resolve);});await new Promise((resolve,reject)=>{gateway.once('error',reject);gateway.listen(4391,'127.0.0.1',resolve);});console.log('Guest sharing server ready');}catch{gateway.closeAllConnections();if(gateway.listening)await new Promise(r=>gateway.close(r));await app.close();await desktop.close();console.error('分享服务启动失败，请检查4390/4391端口和数据库');process.exit(1);}
+for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{gateway.closeAllConnections();await new Promise(r=>gateway.close(r));await app.close();await desktop.close();process.exit(0);});

@@ -1,0 +1,108 @@
+{
+  "name": "mondrian-mcp",
+  "services": {
+    "task": {
+      "build": {
+        "context": ".",
+        "dockerfile": "Dockerfile.sandbox"
+      },
+      "image": "mondrian-mcp:local",
+      "user": "1000:1000",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "init": true,
+      "pids_limit": 64,
+      "mem_limit": "768m",
+      "cpus": 1,
+      "restart": "unless-stopped",
+      "stop_grace_period": "20s",
+      "volumes": [
+        "records:/app/data"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,size=16m"
+      ],
+      "networks": [
+        "isolated"
+      ],
+      "environment": {
+        "PUBLIC_ORIGIN": "${PUBLIC_ORIGIN:?Set the HTTPS origin}",
+        "INVITATION_TOKEN": "${INVITATION_TOKEN:?Generate sandbox credentials}",
+        "GATEWAY_SECRET": "${GATEWAY_SECRET:?Generate sandbox credentials}",
+        "DATA_DIR": "/app/data",
+        "MCP_BIND_HOST": "0.0.0.0"
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "src/sandbox-health.js"
+        ],
+        "interval": "30s",
+        "timeout": "5s",
+        "start_period": "10s",
+        "retries": 3
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      }
+    },
+    "entry": {
+      "image": "mondrian-mcp:local",
+      "user": "1000:1000",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "init": true,
+      "pids_limit": 32,
+      "mem_limit": "96m",
+      "cpus": 0.25,
+      "restart": "unless-stopped",
+      "command": [
+        "node",
+        "src/gateway-proxy.js"
+      ],
+      "ports": [
+        "127.0.0.1:4391:4391"
+      ],
+      "networks": [
+        "isolated",
+        "entry"
+      ],
+      "depends_on": {
+        "task": {
+          "condition": "service_healthy"
+        }
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "5m",
+          "max-file": "2"
+        }
+      }
+    }
+  },
+  "networks": {
+    "isolated": {
+      "internal": true
+    },
+    "entry": {}
+  },
+  "volumes": {
+    "records": {}
+  }
+}

@@ -1,0 +1,11 @@
+FROM node:24-bookworm-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+COPY --chown=node:node src/ ./src/
+COPY --chown=node:node public/ ./public/
+RUN mkdir -p /app/data && chown node:node /app/data
+USER node
+ENV NODE_ENV=production DATA_DIR=/app/data MCP_BIND_HOST=0.0.0.0
+EXPOSE 4391
+CMD ["node", "src/sandbox-server.js"]
